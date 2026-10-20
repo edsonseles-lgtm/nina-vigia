@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -55,8 +56,21 @@ def _chamar(url: str, token: str):
         return None, str(getattr(e, "reason", None) or e)[:120]
 
 
-def checar(chamar) -> list[str]:
+ESPERA_NOVA_TENTATIVA = 10  # o runner do GitHub às vezes fica sem rede por um instante (20/10: Errno 101)
+
+
+def _so_ipv4(original):
+    """getaddrinfo só com IPv4: o runner do GitHub não tem IPv6 e o VPS publica AAAA."""
+    def getaddrinfo(host, porta, family=0, *args, **kwargs):
+        return original(host, porta, socket.AF_INET, *args, **kwargs)
+    return getaddrinfo
+
+
+def checar(chamar, dormir=time.sleep) -> list[str]:
     status, texto = chamar()
+    if status is None:  # sem resposta pode ser a rede do runner: tenta mais uma vez antes de contar
+        dormir(ESPERA_NOVA_TENTATIVA)
+        status, texto = chamar()
     if status == 200:
         return []
     if status is None:
@@ -103,6 +117,7 @@ def rodada(probs: list[str], arq_estado: Path, enviar, agora: float | None = Non
 
 
 if __name__ == "__main__":
+    socket.getaddrinfo = _so_ipv4(socket.getaddrinfo)
     e = os.environ
     arq = Path(sys.argv[sys.argv.index("--estado") + 1]) if "--estado" in sys.argv else Path("estado/estado.json")
     probs = checar(lambda: _chamar(e["VIGIA_URL"], e["VIGIA_TOKEN"]))
