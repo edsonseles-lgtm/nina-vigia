@@ -1,0 +1,65 @@
+name: vigia
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # a cada 10 min (o GitHub pode atrasar alguns minutos ou pular rodadas no pico)
+    - cron: "17 12 1 * *"    # dia 1 de cada mês: commit vazio para o GitHub não desligar o cron (60 dias sem atividade)
+  workflow_dispatch:
+    inputs:
+      teste_token_errado:
+        description: "Teste controlado: usa um token errado e um estado separado (não mexe no estado real)"
+        type: boolean
+        default: false
+      teste:
+        description: "Usa o estado separado de teste (para a rodada de 'voltou' depois do teste)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: vigia
+  cancel-in-progress: false
+
+jobs:
+  checar:
+    if: github.event.schedule != '17 12 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ESTADO: ${{ (inputs.teste || inputs.teste_token_errado) && 'teste' || 'real' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Estado da rodada anterior
+        uses: actions/cache/restore@v4
+        with:
+          path: estado
+          key: vigia-${{ env.ESTADO }}-${{ github.run_id }}
+          restore-keys: vigia-${{ env.ESTADO }}-
+      - name: Checar a Nina
+        env:
+          VIGIA_URL: ${{ secrets.VIGIA_URL }}
+          VIGIA_TOKEN: ${{ inputs.teste_token_errado && 'token-errado-de-teste' || secrets.VIGIA_TOKEN }}
+          ALERTA_URL: ${{ secrets.ALERTA_URL }}
+          ALERTA_TOKEN: ${{ secrets.ALERTA_TOKEN }}
+          ALERTA_NUMERO: ${{ secrets.ALERTA_NUMERO }}
+        run: python3 vigia.py --estado estado/estado.json
+      - name: Guardar o estado
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: estado
+          key: vigia-${{ env.ESTADO }}-${{ github.run_id }}
+
+  manter-ligado:
+    if: github.event.schedule == '17 12 1 * *'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: mantém o cron do vigia ligado"
+          git push
